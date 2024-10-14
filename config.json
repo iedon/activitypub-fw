@@ -1,0 +1,15 @@
+{
+    "listen": {
+        "address": "::",
+        "path": "/var/run/activitypub-fw.sock",
+        "port": "8080",
+        "protocol": "unix"
+    },
+    "proxy": {
+        "readTimeout": 5,
+        "writeTimeout": 10,
+        "idleTimeout": 120,
+        "protocol": "unix",
+        "url": "http://"
+    }
+}
