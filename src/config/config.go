@@ -6,19 +6,28 @@ import (
 )
 
 type ListenConfig struct {
-	Address  string `json:"address"`
-	Path     string `json:"path"`
-	Port     int    `json:"port"`
-	Protocol string `json:"protocol"` // "unix" or "tcp"
-}
-
-type ProxyConfig struct {
+	Address      string `json:"address"`
+	Path         string `json:"path"`
+	Port         int    `json:"port"`
+	Protocol     string `json:"protocol"`     // "unix" or "tcp"
 	ReadTimeout  int    `json:"readTimeout"`  // in seconds
 	WriteTimeout int    `json:"writeTimeout"` // in seconds
 	IdleTimeout  int    `json:"idleTimeout"`  // in seconds
-	Protocol     string `json:"protocol"`     // "unix" or "tcp"
-	UnixPath     string `json:"unixPath"`
-	Url          string `json:"url"`
+}
+
+type ProxyConfig struct {
+	Protocol              string `json:"protocol"` // "unix" or "tcp"
+	UnixPath              string `json:"unixPath"`
+	Url                   string `json:"url"`
+	ForceAttemptHTTP2     bool   `json:"forceAttemptHttp2"`
+	KeepAlive             int    `json:"keepAlive"`
+	Timeout               int    `json:"timeout"`
+	MaxIdleConns          int    `json:"maxIdleConns"`
+	MaxIdleConnsPerHost   int    `json:"maxIdleConnsPerHost"`
+	MaxConnsPerHost       int    `json:"maxConnsPerHost"`
+	IdleConnTimeout       int    `json:"idleConnTimeout"`
+	TLSHandshakeTimeout   int    `json:"tlsHandshakeTimeout"`
+	ExpectContinueTimeout int    `json:"expectContinueTimeout"`
 }
 
 type Config struct {

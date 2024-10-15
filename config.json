@@ -3,13 +3,23 @@
         "address": "::",
         "path": "/var/run/activitypub-fw.sock",
         "port": "8080",
-        "protocol": "unix"
-    },
-    "proxy": {
+        "protocol": "unix",
         "readTimeout": 5,
         "writeTimeout": 10,
-        "idleTimeout": 120,
+        "idleTimeout": 120
+    },
+    "proxy": {
         "protocol": "unix",
-        "url": "http://"
+        "url": "http://",
+        "unixPath": "/var/run/nginx.sock",
+        "forceAttemptHttp2": true,
+        "maxConnsPerHost": 256,
+        "maxIdleConns": 100,
+        "maxIdleConnsPerHost": 5,
+        "idleConnTimeout": 120,
+        "tlsHandshakeTimeout": 10,
+        "expectContinueTimeout": 1,
+        "keepAlive": 30,
+        "Timeout": 30
     }
 }

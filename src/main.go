@@ -54,12 +54,12 @@ func main() {
 		log.Fatalf("Invalid proxy URL: %v", err)
 	}
 
-	http.HandleFunc("/", proxy.ProxyHandler(cfg.Proxy.Protocol, targetURL, cfg.Proxy.UnixPath))
+	http.HandleFunc("/", proxy.ProxyHandler(targetURL, &cfg.Proxy))
 
 	server := &http.Server{
-		ReadTimeout:  time.Duration(cfg.Proxy.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.Proxy.WriteTimeout) * time.Second,
-		IdleTimeout:  time.Duration(cfg.Proxy.IdleTimeout) * time.Second,
+		ReadTimeout:  time.Duration(cfg.Listen.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfg.Listen.WriteTimeout) * time.Second,
+		IdleTimeout:  time.Duration(cfg.Listen.IdleTimeout) * time.Second,
 	}
 
 	log.Printf("Listening on %s://%s", cfg.Listen.Protocol, listener.Addr())

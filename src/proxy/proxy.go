@@ -9,67 +9,82 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/iedon/activitypub-fw/config"
 )
 
-func ProxyHandler(protocol string, targetURL *url.URL, unixPath string) http.HandlerFunc {
+func ProxyHandler(targetURL *url.URL, cfg *config.ProxyConfig) http.HandlerFunc {
 	return func(respW http.ResponseWriter, req *http.Request) {
+		ApplyIncomingProxyHeaders(req)
 		proxy := &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
 				rewriteHandler(targetURL, r, req)
 			},
-			Transport: createTransport(protocol, targetURL, unixPath),
+			Transport:      createTransport(targetURL, cfg),
+			ModifyResponse: modifyResponse,
 		}
 		proxy.ServeHTTP(respW, req)
 	}
 }
 
 // createTransport configures the HTTP transport with custom dialing logic
-func createTransport(protocol string, targetURL *url.URL, unixPath string) *http.Transport {
+func createTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transport {
+	dialer := &net.Dialer{
+		Timeout:   time.Duration(cfg.Timeout) * time.Second,   // Dial timeout
+		KeepAlive: time.Duration(cfg.KeepAlive) * time.Second, // Keep-alive period for TCP connections
+	}
+
 	return &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			var _protocol, _path string
+			var protocol, path string
 
-			switch protocol {
+			switch cfg.Protocol {
 			case "tcp":
-				_protocol = "tcp"
+				protocol = "tcp"
 				port := targetURL.Port()
 				if port == "" {
-					port = defaultPort(targetURL.Scheme)
+					var err error
+					port, err = defaultPort(targetURL.Scheme)
+					if err != nil {
+						return nil, err
+					}
 				}
-				_path = net.JoinHostPort(targetURL.Hostname(), port)
+				path = net.JoinHostPort(targetURL.Hostname(), port)
 			case "unix", "unixgram", "unixpacket":
-				_protocol = "unix"
-				_path = unixPath
+				protocol = "unix"
+				path = cfg.UnixPath
 			default:
-				return nil, fmt.Errorf("unsupported protocol: %s", protocol)
+				return nil, fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
 			}
 
-			return net.Dial(_protocol, _path)
+			return dialer.DialContext(ctx, protocol, path)
 		},
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConns:          cfg.MaxIdleConns,
+		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
+		MaxConnsPerHost:       cfg.MaxConnsPerHost,
+		IdleConnTimeout:       time.Duration(cfg.IdleConnTimeout) * time.Second,
+		TLSHandshakeTimeout:   time.Duration(cfg.TLSHandshakeTimeout) * time.Second,
+		ExpectContinueTimeout: time.Duration(cfg.ExpectContinueTimeout) * time.Second,
+		ForceAttemptHTTP2:     cfg.ForceAttemptHTTP2,
 	}
 }
 
 // defaultPort returns the default port for a given scheme
-func defaultPort(scheme string) string {
+func defaultPort(scheme string) (string, error) {
 	switch scheme {
 	case "http":
-		return "80"
+		return "80", nil
 	case "https":
-		return "443"
+		return "443", nil
 	default:
-		panic(fmt.Sprintf("Unsupported scheme: %s", scheme))
+		return "", fmt.Errorf("unsupported scheme: %s", scheme)
 	}
 }
 
-// Updates the X-Forwarded-* header in the HTTP request
-func UpdateHeader(headers *http.Header, key string, value string) {
+// Sets the X-Forward header in the HTTP request
+func SetForwardHeader(headers *http.Header, key string, value string) {
 	// If we aren't the first proxy retain prior
-	// X-Forwarded-* information as a comma+space
+	// header information as a comma+space
 	// separated list and fold multiple headers into one.
 	prior, ok := (*headers)[key]
 	omit := ok && prior == nil // Go net/http/httputil issue 38079: nil now means don't populate the header
@@ -88,10 +103,10 @@ func rewriteHandler(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Req
 	pr.Out.Host = req.Host
 
 	if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
-		UpdateHeader(&pr.Out.Header, "X-Forwarded-For", clientIP)
+		SetForwardHeader(&pr.Out.Header, "X-Forwarded-For", clientIP)
 	}
 
-	UpdateHeader(&pr.Out.Header, "X-Forwarded-Host", req.Host)
+	SetForwardHeader(&pr.Out.Header, "X-Forwarded-Host", req.Host)
 
 	var scheme string
 	if req.TLS != nil {
@@ -99,6 +114,40 @@ func rewriteHandler(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Req
 	} else {
 		scheme = "http"
 	}
-	UpdateHeader(&pr.Out.Header, "X-Forwarded-Proto", scheme)
 
+	SetForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", scheme)
+}
+
+// ApplyIncomingProxyHeaders is a middleware that updates the request context
+// with the original client IP and protocol based on X-Forwarded headers.
+func ApplyIncomingProxyHeaders(r *http.Request) {
+	// Extract the original client IP from X-Forwarded-For or X-Real-IP
+	clientIP := GetIncomingClientRealIP(r)
+
+	// Extract the original protocol from X-Forwarded-Proto
+	if forwardedProto := r.Header.Get("X-Forwarded-Proto"); forwardedProto != "" {
+		r.URL.Scheme = forwardedProto
+	}
+
+	// Update r.RemoteAddr with the client IP
+	if clientIP != "" {
+		r.RemoteAddr = clientIP
+	}
+}
+
+// GetIncomingClientRealIP extracts the client IP address from X-Forwarded-For or X-Real-IP headers.
+func GetIncomingClientRealIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For can contain multiple IPs, we take the first one
+		ips := strings.Split(xff, ",")
+		if len(ips) > 0 {
+			return strings.TrimSpace(ips[0])
+		}
+	}
+
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+
+	return ""
 }

@@ -1,2 +1,4 @@
 .DS_Store
 src/config.json
+src/activitypub-fw
+src/activitypub-fw.exe
