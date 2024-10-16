@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 
 	"github.com/iedon/activitypub-fw/config"
@@ -34,14 +35,21 @@ func main() {
 
 	var listener net.Listener
 
-	switch cfg.Server.Protocol {
-	case "unix":
-		listener, err = net.Listen("unix", cfg.Server.Path)
-	case "tcp":
-		listenAddr := fmt.Sprintf("%s:%d", cfg.Server.Address, cfg.Server.Port)
-		listener, err = net.Listen("tcp", listenAddr)
-	default:
-		log.Fatalf("Unsupported listen type: %s", cfg.Server.Protocol)
+	if os.Getenv("LISTEN_PID") == strconv.Itoa(os.Getpid()) {
+		// Run from systemd
+		const SD_LISTEN_FDS_START = 3
+		f := os.NewFile(SD_LISTEN_FDS_START, "")
+		listener, err = net.FileListener(f)
+	} else {
+		switch cfg.Server.Protocol {
+		case "unix":
+			listener, err = net.Listen("unix", cfg.Server.Path)
+		case "tcp":
+			listenAddr := fmt.Sprintf("%s:%d", cfg.Server.Address, cfg.Server.Port)
+			listener, err = net.Listen("tcp", listenAddr)
+		default:
+			log.Fatalf("Unsupported listen type: %s", cfg.Server.Protocol)
+		}
 	}
 
 	if err != nil {
