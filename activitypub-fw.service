@@ -6,7 +6,7 @@ After=activitypub-fw.socket
 [Service]
 User=www-data
 Restart=always
-RestatSec=5s
+RestartSec=5s
 WorkingDirectory=/opt/activitypub-fw
 ExecStart=/opt/activitypub-fw/activitypub-fw
 
