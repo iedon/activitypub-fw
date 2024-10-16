@@ -1,5 +1,5 @@
 {
-    "listen": {
+    "server": {
         "address": "::",
         "path": "/var/run/activitypub-fw.sock",
         "port": "8080",
@@ -20,6 +20,8 @@
         "tlsHandshakeTimeout": 10,
         "expectContinueTimeout": 1,
         "keepAlive": 30,
-        "Timeout": 30
+        "Timeout": 30,
+        "writeBufferSize": 4096,
+        "readBufferSize": 4096
     }
 }

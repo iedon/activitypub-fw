@@ -34,14 +34,14 @@ func main() {
 
 	var listener net.Listener
 
-	switch cfg.Listen.Protocol {
+	switch cfg.Server.Protocol {
 	case "unix":
-		listener, err = net.Listen("unix", cfg.Listen.Path)
+		listener, err = net.Listen("unix", cfg.Server.Path)
 	case "tcp":
-		listenAddr := fmt.Sprintf("%s:%d", cfg.Listen.Address, cfg.Listen.Port)
+		listenAddr := fmt.Sprintf("%s:%d", cfg.Server.Address, cfg.Server.Port)
 		listener, err = net.Listen("tcp", listenAddr)
 	default:
-		log.Fatalf("Unsupported listen type: %s", cfg.Listen.Protocol)
+		log.Fatalf("Unsupported listen type: %s", cfg.Server.Protocol)
 	}
 
 	if err != nil {
@@ -57,12 +57,12 @@ func main() {
 	http.HandleFunc("/", proxy.ProxyHandler(targetURL, &cfg.Proxy))
 
 	server := &http.Server{
-		ReadTimeout:  time.Duration(cfg.Listen.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.Listen.WriteTimeout) * time.Second,
-		IdleTimeout:  time.Duration(cfg.Listen.IdleTimeout) * time.Second,
+		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
+		IdleTimeout:  time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	}
 
-	log.Printf("Listening on %s://%s", cfg.Listen.Protocol, listener.Addr())
+	log.Printf("Listening on %s://%s", cfg.Server.Protocol, listener.Addr())
 
 	// Use a Goroutine to handle server shutdown gracefully
 	go func() {

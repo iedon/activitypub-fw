@@ -1,0 +1,12 @@
+[Unit]
+Description=ActivityPub-FW Unix Domain Socket
+PartOf=activitypub-fw.service
+
+[Socket]
+Accept=no
+ListenStream=/var/run/activitypub-fw.sock
+SocketGroup=www-data
+SocketMode=0660
+
+[Install]
+WantedBy=sockets.target

@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -13,22 +15,56 @@ import (
 	"github.com/iedon/activitypub-fw/config"
 )
 
+const (
+	SERVER_NAME      = "ActivityPub-FW"
+	SERVER_VERSION   = "0.1"
+	SERVER_SIGNATURE = SERVER_NAME + "/" + SERVER_VERSION
+)
+
 func ProxyHandler(targetURL *url.URL, cfg *config.ProxyConfig) http.HandlerFunc {
-	return func(respW http.ResponseWriter, req *http.Request) {
+	return func(rw http.ResponseWriter, req *http.Request) {
 		ApplyIncomingProxyHeaders(req)
+
+		var body []byte
+		if NeedsInspect(req) {
+			// Read body for inspection
+			var err error
+
+			body, err = io.ReadAll(req.Body)
+			req.Body.Close()
+
+			if err == nil {
+				// Reassign body for proxy
+				req.Body = io.NopCloser(bytes.NewReader(body))
+			}
+		}
+
 		proxy := &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
-				rewriteHandler(targetURL, r, req)
+				RewriteOutgoingRequest(targetURL, r, req)
 			},
-			Transport:      createTransport(targetURL, cfg),
-			ModifyResponse: modifyResponse,
+
+			Transport: CreateTransport(targetURL, cfg),
+
+			ModifyResponse: func(resp *http.Response) error {
+				SetProductInfo(&resp.Header)
+
+				// Request does not need to inspect
+				// Or there's something wrong with request body, passthrough.
+				if body == nil {
+					return nil
+				}
+
+				return InspectRequest(resp, body)
+			},
 		}
-		proxy.ServeHTTP(respW, req)
+
+		proxy.ServeHTTP(rw, req)
 	}
 }
 
-// createTransport configures the HTTP transport with custom dialing logic
-func createTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transport {
+// CreateTransport configures the HTTP transport with custom dialing logic
+func CreateTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transport {
 	dialer := &net.Dialer{
 		Timeout:   time.Duration(cfg.Timeout) * time.Second,   // Dial timeout
 		KeepAlive: time.Duration(cfg.KeepAlive) * time.Second, // Keep-alive period for TCP connections
@@ -44,7 +80,7 @@ func createTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transpor
 				port := targetURL.Port()
 				if port == "" {
 					var err error
-					port, err = defaultPort(targetURL.Scheme)
+					port, err = DefaultPort(targetURL.Scheme)
 					if err != nil {
 						return nil, err
 					}
@@ -66,11 +102,13 @@ func createTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transpor
 		TLSHandshakeTimeout:   time.Duration(cfg.TLSHandshakeTimeout) * time.Second,
 		ExpectContinueTimeout: time.Duration(cfg.ExpectContinueTimeout) * time.Second,
 		ForceAttemptHTTP2:     cfg.ForceAttemptHTTP2,
+		ReadBufferSize:        cfg.ReadBufferSize,
+		WriteBufferSize:       cfg.WriteBufferSize,
 	}
 }
 
-// defaultPort returns the default port for a given scheme
-func defaultPort(scheme string) (string, error) {
+// DefaultPort returns the default port for a given scheme
+func DefaultPort(scheme string) (string, error) {
 	switch scheme {
 	case "http":
 		return "80", nil
@@ -98,7 +136,7 @@ func SetForwardHeader(headers *http.Header, key string, value string) {
 	}
 }
 
-func rewriteHandler(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Request) {
+func RewriteOutgoingRequest(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Request) {
 	pr.SetURL(targetURL)
 	pr.Out.Host = req.Host
 
@@ -108,14 +146,15 @@ func rewriteHandler(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Req
 
 	SetForwardHeader(&pr.Out.Header, "X-Forwarded-Host", req.Host)
 
-	var scheme string
-	if req.TLS != nil {
-		scheme = "https"
+	if scheme := req.URL.Scheme; scheme != "" {
+		SetForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", scheme)
 	} else {
-		scheme = "http"
+		if req.TLS == nil {
+			SetForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", "http")
+		} else {
+			SetForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", "https")
+		}
 	}
-
-	SetForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", scheme)
 }
 
 // ApplyIncomingProxyHeaders is a middleware that updates the request context
@@ -150,4 +189,12 @@ func GetIncomingClientRealIP(r *http.Request) string {
 	}
 
 	return ""
+}
+
+func SetProductInfo(header *http.Header) {
+	if header.Get("Server") == "" {
+		header.Set("Server", SERVER_SIGNATURE)
+	} else {
+		header.Set("X-Powered-By", SERVER_SIGNATURE)
+	}
 }

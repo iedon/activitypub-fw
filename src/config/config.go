@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-type ListenConfig struct {
+type ServerConfig struct {
 	Address      string `json:"address"`
 	Path         string `json:"path"`
 	Port         int    `json:"port"`
@@ -28,10 +28,12 @@ type ProxyConfig struct {
 	IdleConnTimeout       int    `json:"idleConnTimeout"`
 	TLSHandshakeTimeout   int    `json:"tlsHandshakeTimeout"`
 	ExpectContinueTimeout int    `json:"expectContinueTimeout"`
+	WriteBufferSize       int    `json:"writeBufferSize"`
+	ReadBufferSize        int    `json:"readBufferSize"`
 }
 
 type Config struct {
-	Listen ListenConfig `json:"listen"`
+	Server ServerConfig `json:"server"`
 	Proxy  ProxyConfig  `json:"proxy"`
 }
 

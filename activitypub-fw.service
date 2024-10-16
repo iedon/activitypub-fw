@@ -1,0 +1,13 @@
+[Unit]
+Description=ActivityPub-FW
+Requires=activitypub-fw.socket
+After=activitypub-fw.socket
+
+[Service]
+User=www-data
+Restart=always
+RestatSec=5s
+ExecStart=/opt/activitypub-fw/activitypub-fw
+
+[Install]
+WantedBy=multi-user.target
