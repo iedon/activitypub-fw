@@ -140,7 +140,7 @@ func RewriteOutgoingRequest(targetURL *url.URL, pr *httputil.ProxyRequest, req *
 	pr.SetURL(targetURL)
 	pr.Out.Host = req.Host
 
-	if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
+	if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil || req.RemoteAddr != "" {
 		SetForwardHeader(&pr.Out.Header, "X-Forwarded-For", clientIP)
 	}
 

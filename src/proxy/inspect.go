@@ -30,7 +30,7 @@ func NeedsInspect(req *http.Request) bool {
 		return false
 	}
 
-	if contentType := strings.ToLower(req.Header.Get("Content-Type")); !strings.HasPrefix(contentType, "application/activity+json") && !strings.HasPrefix(contentType, "application/json") {
+	if contentType := strings.ToLower(req.Header.Get("Content-Type")); !strings.HasPrefix(contentType, "application/activity+json") && !strings.HasPrefix(contentType, "application/ld+json") && !strings.HasPrefix(contentType, "application/json") {
 		// Invalid request body content type
 		// Passthrough this response
 		log.Printf("[WARN] %s - %s, %s: %s\n", req.RequestURI, req.RemoteAddr, "invalid content type", contentType)
