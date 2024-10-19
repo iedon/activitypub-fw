@@ -9,9 +9,20 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/iedon/activitypub-fw/config"
 )
 
-func NeedsInspect(req *http.Request) bool {
+func needsInspect(req *http.Request) bool {
+	// Catch and check wether current request needs further process
+	// log.Printf("[ACCESS] %s - %s - %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent())
+
+	if req.Method != http.MethodPost {
+		// No request body in this case
+		// Passthrough this response
+		return false
+	}
+
 	// Will catch these patterns
 	const (
 		updatePattern = "/api/i/update"
@@ -21,12 +32,11 @@ func NeedsInspect(req *http.Request) bool {
 		maxBodySize   = 1048576
 	)
 
-	// Catch and check wether current request needs further process
-	// log.Printf("[ACCESS] %s - %s - %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent())
+	usersPatternRegex := regexp.MustCompile(usersPattern)
 
-	if req.Method != http.MethodPost {
-		// No request body in this case
-		// Passthrough this response
+	uri := req.RequestURI
+	if uri != updatePattern && uri != createPattern && uri != inboxPattern && !usersPatternRegex.MatchString(uri) {
+		// Not target uri, passthrough
 		return false
 	}
 
@@ -44,13 +54,10 @@ func NeedsInspect(req *http.Request) bool {
 		return false
 	}
 
-	usersPatternRegex := regexp.MustCompile(usersPattern)
-
-	uri := req.RequestURI
-	return uri == updatePattern || uri == createPattern || uri == inboxPattern || usersPatternRegex.MatchString(uri)
+	return true
 }
 
-func InspectRequest(resp *http.Response, body []byte) error {
+func inspectRequest(resp *http.Response, body []byte, limit *config.LimitConfig) error {
 	req := resp.Request
 
 	var bodyJson map[string]interface{}
@@ -65,25 +72,35 @@ func InspectRequest(resp *http.Response, body []byte) error {
 		cc = len(ccSlice)
 	}
 
-	text := ""
-	if t, ok := bodyJson["text"].(string); ok {
-		text = t
-	}
-
-	atRegex := regexp.MustCompile(`@(\w+)(?:@([\w.-]+))?`)
-	mentions := atRegex.FindAllString(text, -1)
-
-	if len(mentions) > 5 {
-		log.Printf("[WARN] %s - %s - %s, reaching mention limit: %d of %d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), len(mentions), 5)
+	if cc > limit.Cc {
+		log.Printf("[WARN] %s - %s - %s, reaching cc limit: %d of %d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), cc, limit.Cc)
 		log.Println(string(body))
-		BadRequest(resp, req.RequestURI, "Your request has been filterd for too many Ats in filed text.")
+		badRequest(resp, req.RequestURI, "Your request has been filtered for too many items in filed cc.")
 		return nil
 	}
 
-	if cc > 5 {
-		log.Printf("[WARN] %s - %s - %s, reaching cc limit: %d of %d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), cc, 5)
+	content := ""
+	if t, ok := bodyJson["content"].(string); ok {
+		content = t
+	}
+
+	atRegex, _ := regexp.Compile(`@(\w+)(?:@([\w.-]+))?`)
+	mentions := atRegex.FindAllString(content, -1)
+
+	if len(mentions) > limit.Mentions {
+		log.Printf("[WARN] %s - %s - %s, reaching mention limit: %d of %d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), len(mentions), limit.Mentions)
 		log.Println(string(body))
-		BadRequest(resp, req.RequestURI, "Your request has been filterd for too many mensions in filed cc.")
+		badRequest(resp, req.RequestURI, "Your request has been filtered for too many mentions.")
+		return nil
+	}
+
+	for _, keyword := range limit.Keywords {
+		if strings.Contains(content, keyword) {
+			log.Printf("[WARN] %s - %s - %s, hitting keyword: %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), keyword)
+			log.Println(string(body))
+			badRequest(resp, req.RequestURI, "Your request has been filtered for having keywords that denied by our server.")
+			return nil
+		}
 	}
 
 	return nil
@@ -91,7 +108,7 @@ func InspectRequest(resp *http.Response, body []byte) error {
 
 // Note: Returning a 400 in ActivityPub may result in repeated retries from the remote
 // or, in the worst case, delivery suspension. Therefore, return a 202 for 'inbox'.
-func BadRequest(r *http.Response, requestURI string, message string) {
+func badRequest(r *http.Response, requestURI string, message string) {
 	// Set response status
 	if strings.Contains(requestURI, "inbox") {
 		r.StatusCode = http.StatusAccepted
@@ -110,7 +127,7 @@ func BadRequest(r *http.Response, requestURI string, message string) {
 	r.Header = make(http.Header)
 
 	// Rebuild headers
-	SetProductInfo(&r.Header)
+	setProductInfo(&r.Header)
 	r.Header.Set("Content-Type", "application/json; charset=utf-8")
 	r.Header.Set("Content-Length", fmt.Sprint(buf.Len()))
 	r.Header.Set("Cache-Control", "no-cache, no-store")

@@ -7,15 +7,17 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/iedon/activitypub-fw/config"
 	"github.com/iedon/activitypub-fw/proxy"
 )
+
+var cfg *config.Config
 
 func main() {
 	configFilePath := flag.String("c", "config.json", "Path to the JSON configuration file")
@@ -28,10 +30,13 @@ func main() {
 		os.Exit(0)
 	}
 
-	cfg, err := config.LoadConfig(*configFilePath)
+	var err error
+	cfg, err = config.LoadConfig(*configFilePath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		log.Fatalf("Failed to load config: %v\n", err)
 	}
+
+	go watchConfig(*configFilePath)
 
 	var listener net.Listener
 
@@ -48,21 +53,16 @@ func main() {
 			listenAddr := fmt.Sprintf("%s:%d", cfg.Server.Address, cfg.Server.Port)
 			listener, err = net.Listen("tcp", listenAddr)
 		default:
-			log.Fatalf("Unsupported listen type: %s", cfg.Server.Protocol)
+			log.Fatalf("Unsupported listen type: %s\n", cfg.Server.Protocol)
 		}
 	}
 
 	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		log.Fatalf("Failed to listen: %v\n", err)
 	}
 	defer listener.Close()
 
-	targetURL, err := url.Parse(cfg.Proxy.Url)
-	if err != nil {
-		log.Fatalf("Invalid proxy URL: %v", err)
-	}
-
-	http.HandleFunc("/", proxy.ProxyHandler(targetURL, &cfg.Proxy))
+	http.HandleFunc("/", proxy.ProxyHandler(cfg))
 
 	server := &http.Server{
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
@@ -70,7 +70,7 @@ func main() {
 		IdleTimeout:  time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	}
 
-	log.Printf("Listening on %s://%s", cfg.Server.Protocol, listener.Addr())
+	log.Printf("Listening on %s://%s\n", cfg.Server.Protocol, listener.Addr())
 
 	// Use a Goroutine to handle server shutdown gracefully
 	go func() {
@@ -88,8 +88,47 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+		log.Fatalln("Server forced to shutdown:", err)
 	}
 
 	log.Println("Server exiting")
+}
+
+// watchConfig sets up a watcher on the configuration file to reload it on changes
+// This is to reload when limit rules changed, we do not care about other changes for now
+func watchConfig(filename string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Println(err)
+	}
+	defer watcher.Close()
+
+	err = watcher.Add(filename)
+	if err != nil {
+		log.Println(err)
+	}
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Write) {
+				newCfg, err := config.LoadConfig(filename)
+				*cfg = *newCfg
+				if err != nil {
+					log.Printf("Error reloading config: %v\n", err)
+				} else {
+					log.Println("Config reloaded successfully")
+				}
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				log.Println(err)
+				return
+			}
+			log.Printf("Watcher error: %v\n", err)
+		}
+	}
 }

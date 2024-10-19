@@ -32,9 +32,16 @@ type ProxyConfig struct {
 	ReadBufferSize        int    `json:"readBufferSize"`
 }
 
+type LimitConfig struct {
+	Cc       int      `json:"cc"`
+	Mentions int      `json:"mentions"`
+	Keywords []string `json:"keywords"`
+}
+
 type Config struct {
 	Server ServerConfig `json:"server"`
 	Proxy  ProxyConfig  `json:"proxy"`
+	Limit  LimitConfig  `json:"limit"`
 }
 
 func LoadConfig(filename string) (*Config, error) {

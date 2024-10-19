@@ -1,4 +1,4 @@
-# ActivityPub-FW (Under Construction)
+# ActivityPub-FW (alpha)
 
 A middleware inspired by [great-ebichiri-wall](https://github.com/shrimpia/great-ebichiri-wall) to filter incoming inbox messages. However, **in local**.
 
@@ -17,7 +17,7 @@ Usage: ./activitypub-fw [-c config_file]
 ```
 
 # Configuration
-```json
+```json5
 {
     "server": {
         "address": "[::]", // Where we listen. Configure your front proxy server(usually nginx) to contact this. Only works if protocol is "tcp". IPv6 address should be in "[]"
@@ -40,9 +40,14 @@ Usage: ./activitypub-fw [-c config_file]
         "tlsHandshakeTimeout": 10, // Second(s)
         "expectContinueTimeout": 1, // Second(s)
         "keepAlive": 30, // Second(s)
-        "Timeout": 30, // Second(s)
+        "timeout": 30, // Second(s)
         "writeBufferSize": 4096, // Bytes
         "readBufferSize": 4096 // Bytes
+    },
+    "limit": {
+        "cc": 5, // max cc counts in ActivityPub messages
+        "mentions": 5,  // max mentions(at counts) in ActivityPub messages
+        "keywords": [] // string array, any ActivityPub message which matches one of these keywords will be filtered
     }
 }
 ```

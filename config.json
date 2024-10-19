@@ -20,8 +20,13 @@
         "tlsHandshakeTimeout": 10,
         "expectContinueTimeout": 1,
         "keepAlive": 30,
-        "Timeout": 30,
+        "timeout": 30,
         "writeBufferSize": 4096,
         "readBufferSize": 4096
+    },
+    "limit": {
+        "cc": 5,
+        "mentions": 5,
+        "keywords": []
     }
 }

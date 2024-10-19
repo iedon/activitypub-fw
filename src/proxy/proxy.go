@@ -21,12 +21,12 @@ const (
 	SERVER_SIGNATURE = SERVER_NAME + "/" + SERVER_VERSION
 )
 
-func ProxyHandler(targetURL *url.URL, cfg *config.ProxyConfig) http.HandlerFunc {
+func ProxyHandler(cfg *config.Config) http.HandlerFunc {
 	return func(rw http.ResponseWriter, req *http.Request) {
-		ApplyIncomingProxyHeaders(req)
+		applyIncomingProxyHeaders(req)
 
 		var body []byte
-		if NeedsInspect(req) {
+		if needsInspect(req) {
 			// Read body for inspection
 			var err error
 
@@ -39,15 +39,20 @@ func ProxyHandler(targetURL *url.URL, cfg *config.ProxyConfig) http.HandlerFunc 
 			}
 		}
 
+		targetURL, err := url.Parse(cfg.Proxy.Url)
+		if err != nil {
+			panic(fmt.Errorf("invalid proxy URL: %v", err))
+		}
+
 		proxy := &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
-				RewriteOutgoingRequest(targetURL, r, req)
+				rewriteOutgoingRequest(targetURL, r, req)
 			},
 
-			Transport: CreateTransport(targetURL, cfg),
+			Transport: createTransport(targetURL, &cfg.Proxy),
 
 			ModifyResponse: func(resp *http.Response) error {
-				SetProductInfo(&resp.Header)
+				setProductInfo(&resp.Header)
 
 				// Request does not need to inspect
 				// Or there's something wrong with request body, passthrough.
@@ -55,7 +60,7 @@ func ProxyHandler(targetURL *url.URL, cfg *config.ProxyConfig) http.HandlerFunc 
 					return nil
 				}
 
-				return InspectRequest(resp, body)
+				return inspectRequest(resp, body, &cfg.Limit)
 			},
 		}
 
@@ -63,8 +68,8 @@ func ProxyHandler(targetURL *url.URL, cfg *config.ProxyConfig) http.HandlerFunc 
 	}
 }
 
-// CreateTransport configures the HTTP transport with custom dialing logic
-func CreateTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transport {
+// createTransport configures the HTTP transport with custom dialing logic
+func createTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transport {
 	dialer := &net.Dialer{
 		Timeout:   time.Duration(cfg.Timeout) * time.Second,   // Dial timeout
 		KeepAlive: time.Duration(cfg.KeepAlive) * time.Second, // Keep-alive period for TCP connections
@@ -80,7 +85,7 @@ func CreateTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transpor
 				port := targetURL.Port()
 				if port == "" {
 					var err error
-					port, err = DefaultPort(targetURL.Scheme)
+					port, err = defaultPort(targetURL.Scheme)
 					if err != nil {
 						return nil, err
 					}
@@ -107,8 +112,8 @@ func CreateTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transpor
 	}
 }
 
-// DefaultPort returns the default port for a given scheme
-func DefaultPort(scheme string) (string, error) {
+// defaultPort returns the default port for a given scheme
+func defaultPort(scheme string) (string, error) {
 	switch scheme {
 	case "http":
 		return "80", nil
@@ -120,7 +125,7 @@ func DefaultPort(scheme string) (string, error) {
 }
 
 // Sets the X-Forward header in the HTTP request
-func SetForwardHeader(headers *http.Header, key string, value string) {
+func setForwardHeader(headers *http.Header, key string, value string) {
 	// If we aren't the first proxy retain prior
 	// header information as a comma+space
 	// separated list and fold multiple headers into one.
@@ -136,34 +141,34 @@ func SetForwardHeader(headers *http.Header, key string, value string) {
 	}
 }
 
-func RewriteOutgoingRequest(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Request) {
+func rewriteOutgoingRequest(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Request) {
 	pr.SetURL(targetURL)
 	pr.Out.Host = req.Host
 
 	if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {
-		SetForwardHeader(&pr.Out.Header, "X-Forwarded-For", clientIP)
+		setForwardHeader(&pr.Out.Header, "X-Forwarded-For", clientIP)
 	} else if req.RemoteAddr != "" {
-		SetForwardHeader(&pr.Out.Header, "X-Forwarded-For", req.RemoteAddr)
+		setForwardHeader(&pr.Out.Header, "X-Forwarded-For", req.RemoteAddr)
 	}
 
-	SetForwardHeader(&pr.Out.Header, "X-Forwarded-Host", req.Host)
+	setForwardHeader(&pr.Out.Header, "X-Forwarded-Host", req.Host)
 
 	if scheme := req.URL.Scheme; scheme != "" {
-		SetForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", scheme)
+		setForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", scheme)
 	} else {
 		if req.TLS == nil {
-			SetForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", "http")
+			setForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", "http")
 		} else {
-			SetForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", "https")
+			setForwardHeader(&pr.Out.Header, "X-Forwarded-Proto", "https")
 		}
 	}
 }
 
-// ApplyIncomingProxyHeaders is a middleware that updates the request context
+// applyIncomingProxyHeaders is a middleware that updates the request context
 // with the original client IP and protocol based on X-Forwarded headers.
-func ApplyIncomingProxyHeaders(r *http.Request) {
+func applyIncomingProxyHeaders(r *http.Request) {
 	// Extract the original client IP from X-Forwarded-For or X-Real-IP
-	clientIP := GetIncomingClientRealIP(r)
+	clientIP := getIncomingClientRealIP(r)
 
 	// Extract the original protocol from X-Forwarded-Proto
 	if forwardedProto := r.Header.Get("X-Forwarded-Proto"); forwardedProto != "" {
@@ -176,8 +181,8 @@ func ApplyIncomingProxyHeaders(r *http.Request) {
 	}
 }
 
-// GetIncomingClientRealIP extracts the client IP address from X-Forwarded-For or X-Real-IP headers.
-func GetIncomingClientRealIP(r *http.Request) string {
+// getIncomingClientRealIP extracts the client IP address from X-Forwarded-For or X-Real-IP headers.
+func getIncomingClientRealIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// X-Forwarded-For can contain multiple IPs, we take the first one
 		ips := strings.Split(xff, ",")
@@ -193,7 +198,7 @@ func GetIncomingClientRealIP(r *http.Request) string {
 	return ""
 }
 
-func SetProductInfo(header *http.Header) {
+func setProductInfo(header *http.Header) {
 	if header.Get("Server") == "" {
 		header.Set("Server", SERVER_SIGNATURE)
 	} else {
