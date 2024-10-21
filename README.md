@@ -45,7 +45,8 @@ Usage: ./activitypub-fw [-c config_file]
         "readBufferSize": 4096 // Bytes
     },
     "limit": {
-        "cc": 5, // max cc counts in ActivityPub messages
+        "maxBodySize": 1048576, // Bytes, requests with larger body will be passed-through
+        "cc": 6, // max cc counts in ActivityPub messages
         "mentions": 5,  // max mentions(at counts) in ActivityPub messages
         "keywords": [] // string array, any ActivityPub message which matches one of these keywords will be filtered
     }
@@ -59,19 +60,59 @@ Here is a sample nginx configuration section.
 
 ```
 # Comment original upstream "website"
-#upstream backend {
-# server unix:/var/run/mastodon-website.sock fail_timeout=0;
-#}
-# Change to use this project(acts as a middleware, which will contact ```/var/run/mastodon-website.sock``` above instead)
 upstream backend {
+ server unix:/var/run/mastodon-website.sock fail_timeout=0;
+}
+# ActivityPub-FW acts like a middleware, which will contact ```/var/run/mastodon-website.sock``` instead
+upstream activitypub_fw {
  server unix:/var/run/activitypub-fw.sock fail_timeout=0;
+}
+
+location @activitypub_fw {
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Proxy "";
+    proxy_pass_header Server;
+
+    proxy_pass http://activitypub_fw;
+    proxy_buffering on;
+    proxy_redirect off;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+
+    proxy_cache CACHE;
+    proxy_cache_valid 200 7d;
+    proxy_cache_valid 410 24h;
+    proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+    add_header X-Cached $upstream_cache_status;
+
+    tcp_nodelay on;
+}
+
+location = /api/i/update {
+    try_files $uri @activitypub_fw;
+}
+
+location = /api/notes/create {
+    try_files $uri @activitypub_fw;
+}
+
+location /inbox {
+    try_files $uri @activitypub_fw;
+}
+
+location ~ ^/users/.* {
+    try_files $uri @activitypub_fw;
 }
 ```
 
-# Functions
+# Features
 - ✅ Basic filtering by ```At(@)``` and ```Mentions(cc)``` in an ActivityPub message
+- ✅ Basic Blacklist support for content filtering
 - Make an easy-to-use UI
-- Blacklist support for content filtering
 - Real time analyzation
-- Further integrations: AI..., anti-spam interfaces
+- Further integrations: anti-spam interfaces, ...
 - ...

@@ -18,6 +18,7 @@ import (
 )
 
 var cfg *config.Config
+var server *http.Server
 
 func main() {
 	configFilePath := flag.String("c", "config.json", "Path to the JSON configuration file")
@@ -64,7 +65,7 @@ func main() {
 
 	http.HandleFunc("/", proxy.ProxyHandler(cfg))
 
-	server := &http.Server{
+	server = &http.Server{
 		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
 		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
 		IdleTimeout:  time.Duration(cfg.Server.IdleTimeout) * time.Second,
@@ -116,12 +117,17 @@ func watchConfig(filename string) {
 			}
 			if event.Has(fsnotify.Write) {
 				newCfg, err := config.LoadConfig(filename)
-				*cfg = *newCfg
 				if err != nil {
 					log.Printf("Error reloading config: %v\n", err)
-				} else {
-					log.Println("Config reloaded successfully")
+					return
 				}
+				*cfg = *newCfg
+				if server != nil {
+					server.ReadTimeout = time.Duration(cfg.Server.ReadTimeout) * time.Second
+					server.WriteTimeout = time.Duration(cfg.Server.WriteTimeout) * time.Second
+					server.IdleTimeout = time.Duration(cfg.Server.IdleTimeout) * time.Second
+				}
+				log.Println("Config reloaded successfully")
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {

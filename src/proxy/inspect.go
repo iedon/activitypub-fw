@@ -13,7 +13,7 @@ import (
 	"github.com/iedon/activitypub-fw/config"
 )
 
-func needsInspect(req *http.Request) bool {
+func needsInspect(req *http.Request, limit *config.LimitConfig) bool {
 	// Catch and check wether current request needs further process
 	// log.Printf("[ACCESS] %s - %s - %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent())
 
@@ -29,10 +29,12 @@ func needsInspect(req *http.Request) bool {
 		createPattern = "/api/notes/create"
 		inboxPattern  = "/inbox"
 		usersPattern  = `^/users/.*`
-		maxBodySize   = 1048576
 	)
 
-	usersPatternRegex := regexp.MustCompile(usersPattern)
+	usersPatternRegex, err := regexp.Compile(usersPattern)
+	if err != nil {
+		return false
+	}
 
 	uri := req.RequestURI
 	if uri != updatePattern && uri != createPattern && uri != inboxPattern && !usersPatternRegex.MatchString(uri) {
@@ -47,10 +49,10 @@ func needsInspect(req *http.Request) bool {
 		return false
 	}
 
-	if req.ContentLength != -1 && req.ContentLength > maxBodySize {
+	if req.ContentLength != -1 && req.ContentLength > limit.MaxBodySize {
 		// Unknown or invalid response from upstream for current request
 		// Passthrough this response
-		log.Printf("[WARN] %s - %s, %s: %d of %d\n", req.RequestURI, req.RemoteAddr, "invalid or unknown content length", req.ContentLength, maxBodySize)
+		log.Printf("[WARN] %s - %s, body too long or content length is unknwon: %d/%d\n", req.RequestURI, req.RemoteAddr, req.ContentLength, limit.MaxBodySize)
 		return false
 	}
 
@@ -73,37 +75,85 @@ func inspectRequest(resp *http.Response, body []byte, limit *config.LimitConfig)
 	}
 
 	if cc > limit.Cc {
-		log.Printf("[WARN] %s - %s - %s, reaching cc limit: %d of %d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), cc, limit.Cc)
+		log.Printf("[WARN] %s - %s - %s, reaching cc limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), cc, limit.Cc)
 		log.Println(string(body))
 		badRequest(resp, req.RequestURI, "Your request has been filtered for too many items in filed cc.")
 		return nil
 	}
 
-	content := ""
-	if t, ok := bodyJson["content"].(string); ok {
-		content = t
-	}
-
-	atRegex, _ := regexp.Compile(`@(\w+)(?:@([\w.-]+))?`)
-	mentions := atRegex.FindAllString(content, -1)
-
-	if len(mentions) > limit.Mentions {
-		log.Printf("[WARN] %s - %s - %s, reaching mention limit: %d of %d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), len(mentions), limit.Mentions)
+	mentions := countMentions(&bodyJson)
+	if mentions > limit.Mentions {
+		log.Printf("[WARN] %s - %s - %s, reaching mention limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), mentions, limit.Mentions)
 		log.Println(string(body))
 		badRequest(resp, req.RequestURI, "Your request has been filtered for too many mentions.")
 		return nil
 	}
 
-	for _, keyword := range limit.Keywords {
-		if strings.Contains(content, keyword) {
-			log.Printf("[WARN] %s - %s - %s, hitting keyword: %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), keyword)
-			log.Println(string(body))
-			badRequest(resp, req.RequestURI, "Your request has been filtered for having keywords that denied by our server.")
-			return nil
-		}
+	if hit, keyword := hasBadWords(&bodyJson, limit); hit {
+		log.Printf("[WARN] %s - %s - %s, hitting keyword: %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), keyword)
+		log.Println(string(body))
+		badRequest(resp, req.RequestURI, "Your request has been filtered for having keywords that denied by our server.")
+		return nil
 	}
 
 	return nil
+}
+
+func countMentions(body *map[string]interface{}) int {
+	// Check if "object" exists and is a map
+	object, ok := (*body)["object"].(map[string]interface{})
+	if !ok {
+		return 0 // Return 0 if object is not a map
+	}
+
+	// Check if "tag" exists and is a slice
+	tags, ok := object["tag"].([]interface{})
+	if !ok {
+		return 0 // Return 0 if tag is not a slice
+	}
+
+	count := 0
+	for _, tag := range tags {
+		if tagMap, ok := tag.(map[string]interface{}); ok {
+			if tagType, ok := tagMap["type"].(string); ok && strings.ToLower(tagType) == "mention" {
+				count++
+			}
+		}
+	}
+
+	return count
+}
+
+func hasBadWords(body *map[string]interface{}, limit *config.LimitConfig) (bool, string) {
+	content := ""
+
+	// Check body.content
+	if t, ok := (*body)["content"].(string); ok {
+		content = t
+	} else {
+		// content is not in body, check body.object.content
+		// Check if "object" exists and is a map
+		object, ok := (*body)["object"].(map[string]interface{})
+		if !ok {
+			return false, "" // Return false if object is not a map
+		}
+
+		if t, ok := object["content"].(string); ok {
+			content = t
+		}
+	}
+
+	if content == "" {
+		return false, ""
+	}
+
+	for _, keyword := range limit.Keywords {
+		if strings.Contains(content, keyword) {
+			return true, keyword
+		}
+	}
+
+	return false, ""
 }
 
 // Note: Returning a 400 in ActivityPub may result in repeated retries from the remote

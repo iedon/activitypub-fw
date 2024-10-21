@@ -33,9 +33,10 @@ type ProxyConfig struct {
 }
 
 type LimitConfig struct {
-	Cc       int      `json:"cc"`
-	Mentions int      `json:"mentions"`
-	Keywords []string `json:"keywords"`
+	MaxBodySize int64    `json:"maxBodySize"`
+	Cc          int      `json:"cc"`
+	Mentions    int      `json:"mentions"`
+	Keywords    []string `json:"keywords"`
 }
 
 type Config struct {

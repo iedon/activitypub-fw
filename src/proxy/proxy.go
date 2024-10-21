@@ -26,7 +26,7 @@ func ProxyHandler(cfg *config.Config) http.HandlerFunc {
 		applyIncomingProxyHeaders(req)
 
 		var body []byte
-		if needsInspect(req) {
+		if needsInspect(req, &cfg.Limit) {
 			// Read body for inspection
 			var err error
 
