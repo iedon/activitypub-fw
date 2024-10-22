@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -21,25 +23,46 @@ var cfg *config.Config
 var server *http.Server
 
 func main() {
-	configFilePath := flag.String("c", "config.json", "Path to the JSON configuration file")
+	configFile := flag.String("c", "config.json", "Path to the JSON configuration file")
 	help := flag.Bool("h", false, "Print this message")
 	flag.Parse()
 
 	if *help {
 		fmt.Fprintln(os.Stderr, "Usage:", os.Args[0], "[-c config_file]")
 		flag.PrintDefaults()
-		os.Exit(0)
+		return
 	}
 
+	loadConfig(*configFile)
+
+	listener, err := createListener(cfg)
+	if err != nil {
+		log.Fatalf("Failed to listen: %v\n", err)
+	}
+
+	server = &http.Server{}
+	setServerParameters(server, cfg)
+
+	http.HandleFunc("/", proxy.ProxyHandler(cfg))
+
+	log.Printf("Listening on %s://%s\n", cfg.Config.Server.Protocol, listener.Addr())
+	daemon(listener)
+}
+
+func loadConfig(configFile string) {
 	var err error
-	cfg, err = config.LoadConfig(*configFilePath)
+	cfg, err = config.LoadConfig(configFile)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v\n", err)
 	}
 
-	go watchConfig(*configFilePath)
+	go watchConfig(configFile)
+}
 
+// CreateListener initializes a net.Listener based on the server configuration and environment
+func createListener(cfg *config.Config) (net.Listener, error) {
 	var listener net.Listener
+	var err error
 
 	if os.Getenv("LISTEN_PID") == strconv.Itoa(os.Getpid()) {
 		// Run from systemd
@@ -47,33 +70,38 @@ func main() {
 		f := os.NewFile(SD_LISTEN_FDS_START, "")
 		listener, err = net.FileListener(f)
 	} else {
-		switch cfg.Server.Protocol {
+		switch strings.ToLower(cfg.Config.Server.Protocol) {
 		case "unix":
-			listener, err = net.Listen("unix", cfg.Server.Path)
+			listener, err = net.Listen("unix", cfg.Config.Server.Path)
 		case "tcp":
-			listenAddr := fmt.Sprintf("%s:%d", cfg.Server.Address, cfg.Server.Port)
+			listenAddr := fmt.Sprintf("%s:%d", cfg.Config.Server.Address, cfg.Config.Server.Port)
 			listener, err = net.Listen("tcp", listenAddr)
 		default:
-			log.Fatalf("Unsupported listen type: %s\n", cfg.Server.Protocol)
+			return nil, fmt.Errorf("unsupported listen type: %s", cfg.Config.Server.Protocol)
 		}
 	}
 
 	if err != nil {
-		log.Fatalf("Failed to listen: %v\n", err)
+		return nil, fmt.Errorf("failed to listen: %w", err)
 	}
+
+	return listener, nil
+}
+
+func setServerParameters(s *http.Server, cfg *config.Config) {
+	if s == nil {
+		return
+	}
+
+	s.ReadTimeout = time.Duration(cfg.Config.Server.ReadTimeout) * time.Second
+	s.WriteTimeout = time.Duration(cfg.Config.Server.WriteTimeout) * time.Second
+	s.IdleTimeout = time.Duration(cfg.Config.Server.IdleTimeout) * time.Second
+}
+
+// Use as a Goroutine to handle server shutdown gracefully
+func daemon(listener net.Listener) {
 	defer listener.Close()
 
-	http.HandleFunc("/", proxy.ProxyHandler(cfg))
-
-	server = &http.Server{
-		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
-		IdleTimeout:  time.Duration(cfg.Server.IdleTimeout) * time.Second,
-	}
-
-	log.Printf("Listening on %s://%s\n", cfg.Server.Protocol, listener.Addr())
-
-	// Use a Goroutine to handle server shutdown gracefully
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Could not serve: %v\n", err)
@@ -104,9 +132,14 @@ func watchConfig(filename string) {
 	}
 	defer watcher.Close()
 
-	err = watcher.Add(filename)
+	absPath, err := filepath.Abs(filename)
 	if err != nil {
-		log.Println(err)
+		log.Fatalln(err)
+	}
+
+	err = watcher.Add(filepath.Dir(absPath))
+	if err != nil {
+		log.Fatalln(err)
 	}
 
 	for {
@@ -115,18 +148,19 @@ func watchConfig(filename string) {
 			if !ok {
 				return
 			}
-			if event.Has(fsnotify.Write) {
+			if event.Has(fsnotify.Write) && event.Name == absPath {
 				newCfg, err := config.LoadConfig(filename)
 				if err != nil {
 					log.Printf("Error reloading config: %v\n", err)
 					return
 				}
-				*cfg = *newCfg
-				if server != nil {
-					server.ReadTimeout = time.Duration(cfg.Server.ReadTimeout) * time.Second
-					server.WriteTimeout = time.Duration(cfg.Server.WriteTimeout) * time.Second
-					server.IdleTimeout = time.Duration(cfg.Server.IdleTimeout) * time.Second
-				}
+
+				cfg.Lock()
+				cfg.Config = newCfg.Config
+				cfg.Unlock()
+
+				setServerParameters(server, cfg)
+
 				log.Println("Config reloaded successfully")
 			}
 		case err, ok := <-watcher.Errors:

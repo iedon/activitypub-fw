@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -23,10 +24,14 @@ const (
 
 func ProxyHandler(cfg *config.Config) http.HandlerFunc {
 	return func(rw http.ResponseWriter, req *http.Request) {
-		applyIncomingProxyHeaders(req)
+		cfg.RLock()
+
+		if isAllowedProxyServer(req, cfg) {
+			applyInboundProxyHeaders(req)
+		}
 
 		var body []byte
-		if needsInspect(req, &cfg.Limit) {
+		if needsInspect(req, cfg) {
 			// Read body for inspection
 			var err error
 
@@ -39,17 +44,18 @@ func ProxyHandler(cfg *config.Config) http.HandlerFunc {
 			}
 		}
 
-		targetURL, err := url.Parse(cfg.Proxy.Url)
+		targetURL, err := url.Parse(cfg.Config.Proxy.Url)
 		if err != nil {
+			cfg.RUnlock()
 			panic(fmt.Errorf("invalid proxy URL: %v", err))
 		}
 
 		proxy := &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
-				rewriteOutgoingRequest(targetURL, r, req)
+				rewriteOutboundRequest(targetURL, r, req)
 			},
 
-			Transport: createTransport(targetURL, &cfg.Proxy),
+			Transport: createTransport(targetURL, cfg),
 
 			ModifyResponse: func(resp *http.Response) error {
 				setProductInfo(&resp.Header)
@@ -60,26 +66,28 @@ func ProxyHandler(cfg *config.Config) http.HandlerFunc {
 					return nil
 				}
 
-				return inspectRequest(resp, body, &cfg.Limit)
+				return inspectRequest(resp, body, cfg)
 			},
 		}
 
 		proxy.ServeHTTP(rw, req)
+
+		cfg.RUnlock()
 	}
 }
 
 // createTransport configures the HTTP transport with custom dialing logic
-func createTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transport {
+func createTransport(targetURL *url.URL, cfg *config.Config) *http.Transport {
 	dialer := &net.Dialer{
-		Timeout:   time.Duration(cfg.Timeout) * time.Second,   // Dial timeout
-		KeepAlive: time.Duration(cfg.KeepAlive) * time.Second, // Keep-alive period for TCP connections
+		Timeout:   time.Duration(cfg.Config.Proxy.Timeout) * time.Second,   // Dial timeout
+		KeepAlive: time.Duration(cfg.Config.Proxy.KeepAlive) * time.Second, // Keep-alive period for TCP connections
 	}
 
 	return &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			var protocol, path string
 
-			switch cfg.Protocol {
+			switch strings.ToLower(cfg.Config.Server.Protocol) {
 			case "tcp":
 				protocol = "tcp"
 				port := targetURL.Port()
@@ -91,24 +99,24 @@ func createTransport(targetURL *url.URL, cfg *config.ProxyConfig) *http.Transpor
 					}
 				}
 				path = net.JoinHostPort(targetURL.Hostname(), port)
-			case "unix", "unixgram", "unixpacket":
+			case "unix":
 				protocol = "unix"
-				path = cfg.UnixPath
+				path = cfg.Config.Proxy.UnixPath
 			default:
-				return nil, fmt.Errorf("unsupported protocol: %s", cfg.Protocol)
+				return nil, fmt.Errorf("unsupported protocol: %s", cfg.Config.Proxy.Protocol)
 			}
 
 			return dialer.DialContext(ctx, protocol, path)
 		},
-		MaxIdleConns:          cfg.MaxIdleConns,
-		MaxIdleConnsPerHost:   cfg.MaxIdleConnsPerHost,
-		MaxConnsPerHost:       cfg.MaxConnsPerHost,
-		IdleConnTimeout:       time.Duration(cfg.IdleConnTimeout) * time.Second,
-		TLSHandshakeTimeout:   time.Duration(cfg.TLSHandshakeTimeout) * time.Second,
-		ExpectContinueTimeout: time.Duration(cfg.ExpectContinueTimeout) * time.Second,
-		ForceAttemptHTTP2:     cfg.ForceAttemptHTTP2,
-		ReadBufferSize:        cfg.ReadBufferSize,
-		WriteBufferSize:       cfg.WriteBufferSize,
+		MaxIdleConns:          cfg.Config.Proxy.MaxIdleConns,
+		MaxIdleConnsPerHost:   cfg.Config.Proxy.MaxIdleConnsPerHost,
+		MaxConnsPerHost:       cfg.Config.Proxy.MaxConnsPerHost,
+		IdleConnTimeout:       time.Duration(cfg.Config.Proxy.IdleConnTimeout) * time.Second,
+		TLSHandshakeTimeout:   time.Duration(cfg.Config.Proxy.TLSHandshakeTimeout) * time.Second,
+		ExpectContinueTimeout: time.Duration(cfg.Config.Proxy.ExpectContinueTimeout) * time.Second,
+		ForceAttemptHTTP2:     cfg.Config.Proxy.ForceAttemptHTTP2,
+		ReadBufferSize:        cfg.Config.Proxy.ReadBufferSize,
+		WriteBufferSize:       cfg.Config.Proxy.WriteBufferSize,
 	}
 }
 
@@ -141,7 +149,7 @@ func setForwardHeader(headers *http.Header, key string, value string) {
 	}
 }
 
-func rewriteOutgoingRequest(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Request) {
+func rewriteOutboundRequest(targetURL *url.URL, pr *httputil.ProxyRequest, req *http.Request) {
 	pr.SetURL(targetURL)
 	pr.Out.Host = req.Host
 
@@ -164,11 +172,41 @@ func rewriteOutgoingRequest(targetURL *url.URL, pr *httputil.ProxyRequest, req *
 	}
 }
 
-// applyIncomingProxyHeaders is a middleware that updates the request context
+func isAllowedProxyServer(r *http.Request, cfg *config.Config) bool {
+	if strings.ToLower(cfg.Config.Server.Protocol) == "unix" {
+		return true
+	}
+
+	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+
+	ip, err := netip.ParseAddr(clientIP)
+	if err != nil {
+		return false
+	}
+
+	for _, netStr := range cfg.Config.Server.InboundProxyNetworks {
+		if prefix, err := netip.ParsePrefix(netStr); err == nil {
+			if prefix.Contains(ip) {
+				return true
+			}
+		} else if addr, err := netip.ParseAddr(netStr); err == nil {
+			if addr == ip {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// applyInboundProxyHeaders is a middleware that updates the request context
 // with the original client IP and protocol based on X-Forwarded headers.
-func applyIncomingProxyHeaders(r *http.Request) {
+func applyInboundProxyHeaders(r *http.Request) {
 	// Extract the original client IP from X-Forwarded-For or X-Real-IP
-	clientIP := getIncomingClientRealIP(r)
+	clientIP := getInboundClientRealIP(r)
 
 	// Extract the original protocol from X-Forwarded-Proto
 	if forwardedProto := r.Header.Get("X-Forwarded-Proto"); forwardedProto != "" {
@@ -181,8 +219,8 @@ func applyIncomingProxyHeaders(r *http.Request) {
 	}
 }
 
-// getIncomingClientRealIP extracts the client IP address from X-Forwarded-For or X-Real-IP headers.
-func getIncomingClientRealIP(r *http.Request) string {
+// getInboundClientRealIP extracts the client IP address from X-Forwarded-For or X-Real-IP headers.
+func getInboundClientRealIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// X-Forwarded-For can contain multiple IPs, we take the first one
 		ips := strings.Split(xff, ",")

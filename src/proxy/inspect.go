@@ -13,7 +13,7 @@ import (
 	"github.com/iedon/activitypub-fw/config"
 )
 
-func needsInspect(req *http.Request, limit *config.LimitConfig) bool {
+func needsInspect(req *http.Request, cfg *config.Config) bool {
 	// Catch and check wether current request needs further process
 	// log.Printf("[ACCESS] %s - %s - %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent())
 
@@ -49,17 +49,17 @@ func needsInspect(req *http.Request, limit *config.LimitConfig) bool {
 		return false
 	}
 
-	if req.ContentLength != -1 && req.ContentLength > limit.MaxBodySize {
+	if req.ContentLength != -1 && req.ContentLength > cfg.Config.Limit.MaxBodySize {
 		// Unknown or invalid response from upstream for current request
 		// Passthrough this response
-		log.Printf("[WARN] %s - %s, body too long or content length is unknwon: %d/%d\n", req.RequestURI, req.RemoteAddr, req.ContentLength, limit.MaxBodySize)
+		log.Printf("[WARN] %s - %s, body too long or content length is unknwon: %d/%d\n", req.RequestURI, req.RemoteAddr, req.ContentLength, cfg.Config.Limit.MaxBodySize)
 		return false
 	}
 
 	return true
 }
 
-func inspectRequest(resp *http.Response, body []byte, limit *config.LimitConfig) error {
+func inspectRequest(resp *http.Response, body []byte, cfg *config.Config) error {
 	req := resp.Request
 
 	var bodyJson map[string]interface{}
@@ -74,22 +74,22 @@ func inspectRequest(resp *http.Response, body []byte, limit *config.LimitConfig)
 		cc = len(ccSlice)
 	}
 
-	if cc > limit.Cc {
-		log.Printf("[WARN] %s - %s - %s, reaching cc limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), cc, limit.Cc)
+	if cc > cfg.Config.Limit.Cc {
+		log.Printf("[WARN] %s - %s - %s, reaching cc limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), cc, cfg.Config.Limit.Cc)
 		log.Println(string(body))
 		badRequest(resp, req.RequestURI, "Your request has been filtered for too many items in filed cc.")
 		return nil
 	}
 
 	mentions := countMentions(&bodyJson)
-	if mentions > limit.Mentions {
-		log.Printf("[WARN] %s - %s - %s, reaching mention limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), mentions, limit.Mentions)
+	if mentions > cfg.Config.Limit.Mentions {
+		log.Printf("[WARN] %s - %s - %s, reaching mention limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), mentions, cfg.Config.Limit.Mentions)
 		log.Println(string(body))
 		badRequest(resp, req.RequestURI, "Your request has been filtered for too many mentions.")
 		return nil
 	}
 
-	if hit, keyword := hasBadWords(&bodyJson, limit); hit {
+	if hit, keyword := hasBadWords(&bodyJson, cfg); hit {
 		log.Printf("[WARN] %s - %s - %s, hitting keyword: %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), keyword)
 		log.Println(string(body))
 		badRequest(resp, req.RequestURI, "Your request has been filtered for having keywords that denied by our server.")
@@ -124,7 +124,7 @@ func countMentions(body *map[string]interface{}) int {
 	return count
 }
 
-func hasBadWords(body *map[string]interface{}, limit *config.LimitConfig) (bool, string) {
+func hasBadWords(body *map[string]interface{}, cfg *config.Config) (bool, string) {
 	content := ""
 
 	// Check body.content
@@ -147,7 +147,7 @@ func hasBadWords(body *map[string]interface{}, limit *config.LimitConfig) (bool,
 		return false, ""
 	}
 
-	for _, keyword := range limit.Keywords {
+	for _, keyword := range cfg.Config.Limit.Keywords {
 		if strings.Contains(content, keyword) {
 			return true, keyword
 		}

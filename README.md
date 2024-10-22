@@ -26,7 +26,11 @@ Usage: ./activitypub-fw [-c config_file]
         "protocol": "tcp", // "tcp" or "unix"
         "readTimeout": 5, // Second(s)
         "writeTimeout": 10, // Second(s)
-        "idleTimeout": 120 // Second(s)
+        "idleTimeout": 120, // Second(s)
+        "inboundProxyNetworks": [ // String array of IP addresses or networks in CIDR. X-Forwarded headers from these networks will be trusted. Always be trusted if protocol is unix
+            "127.0.0.1",
+            "::1"
+        ]
     },
     "proxy": {
         "protocol": "tcp", // "tcp" or "unix"
@@ -104,7 +108,7 @@ location /inbox {
     try_files $uri @activitypub_fw;
 }
 
-location ~ ^/users/.* {
+location /users {
     try_files $uri @activitypub_fw;
 }
 ```
@@ -112,7 +116,8 @@ location ~ ^/users/.* {
 # Features
 - ✅ Basic filtering by ```At(@)``` and ```Mentions(cc)``` in an ActivityPub message
 - ✅ Basic Blacklist support for content filtering
+- ✅ Basic partial hot reload
 - Make an easy-to-use UI
-- Real time analyzation
-- Further integrations: anti-spam interfaces, ...
+- Real time analyzation/log
+- Further integrations: anti-spam, ...
 - ...

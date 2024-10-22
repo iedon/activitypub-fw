@@ -6,7 +6,11 @@
         "protocol": "unix",
         "readTimeout": 5,
         "writeTimeout": 10,
-        "idleTimeout": 120
+        "idleTimeout": 120,
+        "inboundProxyNetworks": [
+            "127.0.0.1",
+            "::1"
+        ]
     },
     "proxy": {
         "protocol": "unix",
