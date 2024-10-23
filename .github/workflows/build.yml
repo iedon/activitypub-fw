@@ -5,7 +5,7 @@ on:
     types: [published]
 
 jobs:
-  build:
+  compile:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -35,3 +35,26 @@ jobs:
         with:
           name: activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
           path: ./src/activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
+
+  release:
+    needs: compile
+    name: Release to GitHub
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [386, amd64, arm64]
+        exclude:
+          - goarch: 386
+            goos: darwin
+          - goarch: arm64
+            goos: windows
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: ./src/activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          files: activitypub-fw_*
