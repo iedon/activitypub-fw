@@ -57,4 +57,4 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
+          files: activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}/activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
