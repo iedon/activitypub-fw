@@ -1,10 +1,7 @@
 package proxy
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -15,7 +12,9 @@ import (
 
 func needsInspect(req *http.Request, cfg *config.Config) bool {
 	// Catch and check wether current request needs further process
-	// log.Printf("[ACCESS] %s - %s - %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent())
+	if cfg.Config.Server.Debug {
+		log.Printf("[ACCESS] %s - %s - %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent())
+	}
 
 	if req.Method != http.MethodPost {
 		// No request body in this case
@@ -59,14 +58,17 @@ func needsInspect(req *http.Request, cfg *config.Config) bool {
 	return true
 }
 
-func inspectRequest(resp *http.Response, body []byte, cfg *config.Config) error {
-	req := resp.Request
-
+// Empty string if the request passed/should skip the inspection, anything else for the reason this request should be filtered.
+func inspectRequest(req *http.Request, body []byte, cfg *config.Config) string {
 	var bodyJson map[string]interface{}
 	err := json.Unmarshal(body, &bodyJson)
 	if err != nil {
 		// Passthrough
-		return nil
+		return ""
+	}
+
+	if cfg.Config.Server.Debug {
+		log.Println(string(body))
 	}
 
 	cc := 0
@@ -74,29 +76,35 @@ func inspectRequest(resp *http.Response, body []byte, cfg *config.Config) error 
 		cc = len(ccSlice)
 	}
 
+	if cfg.Config.Server.Debug {
+		log.Printf("[INFO] %s - %s - %s, cc limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), cc, cfg.Config.Limit.Cc)
+	}
+
 	if cc > cfg.Config.Limit.Cc {
 		log.Printf("[WARN] %s - %s - %s, reaching cc limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), cc, cfg.Config.Limit.Cc)
 		log.Println(string(body))
-		badRequest(resp, req.RequestURI, "Your request has been filtered for too many items in filed cc.")
-		return nil
+		return "Your request has been filtered for too many items in filed cc."
 	}
 
 	mentions := countMentions(&bodyJson)
+
+	if cfg.Config.Server.Debug {
+		log.Printf("[INFO] %s - %s - %s, mention limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), mentions, cfg.Config.Limit.Mentions)
+	}
+
 	if mentions > cfg.Config.Limit.Mentions {
 		log.Printf("[WARN] %s - %s - %s, reaching mention limit: %d/%d\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), mentions, cfg.Config.Limit.Mentions)
 		log.Println(string(body))
-		badRequest(resp, req.RequestURI, "Your request has been filtered for too many mentions.")
-		return nil
+		return "Your request has been filtered for too many mentions."
 	}
 
 	if hit, keyword := hasBadWords(&bodyJson, cfg); hit {
 		log.Printf("[WARN] %s - %s - %s, hitting keyword: %s\n", req.RequestURI, req.RemoteAddr, req.UserAgent(), keyword)
 		log.Println(string(body))
-		badRequest(resp, req.RequestURI, "Your request has been filtered for having keywords that denied by our server.")
-		return nil
+		return "Your request has been filtered for having keywords that denied by our server."
 	}
 
-	return nil
+	return ""
 }
 
 func countMentions(body *map[string]interface{}) int {
@@ -154,32 +162,4 @@ func hasBadWords(body *map[string]interface{}, cfg *config.Config) (bool, string
 	}
 
 	return false, ""
-}
-
-// Note: Returning a 400 in ActivityPub may result in repeated retries from the remote
-// or, in the worst case, delivery suspension. Therefore, return a 202 for 'inbox'.
-func badRequest(r *http.Response, requestURI string, message string) {
-	// Set response status
-	if strings.Contains(requestURI, "inbox") {
-		r.StatusCode = http.StatusAccepted
-		r.Status = http.StatusText(http.StatusAccepted)
-	} else {
-		r.StatusCode = http.StatusBadRequest
-		r.Status = http.StatusText(http.StatusBadRequest)
-	}
-
-	// Reassign body
-	buf := bytes.NewBufferString(fmt.Sprintf("{\"code\": %d,\"status\":\"%s\",\"message\":\"%s\"}", r.StatusCode, r.Status, message))
-	r.Body.Close()
-	r.Body = io.NopCloser(buf)
-
-	// Clear upstream header and reassign an empty one
-	r.Header = make(http.Header)
-
-	// Rebuild headers
-	setProductInfo(&r.Header)
-	r.Header.Set("Content-Type", "application/json; charset=utf-8")
-	r.Header.Set("Content-Length", fmt.Sprint(buf.Len()))
-	r.Header.Set("Cache-Control", "no-cache, no-store")
-	r.Header.Set("Pragma", "no-cache")
 }

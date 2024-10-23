@@ -1,5 +1,6 @@
 {
     "server": {
+        "debug": false,
         "address": "::",
         "path": "/var/run/activitypub-fw.sock",
         "port": "8080",

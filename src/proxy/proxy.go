@@ -30,50 +30,54 @@ func ProxyHandler(cfg *config.Config) http.HandlerFunc {
 			applyInboundProxyHeaders(req)
 		}
 
-		var body []byte
 		if needsInspect(req, cfg) {
 			// Read body for inspection
 			var err error
 
-			body, err = io.ReadAll(req.Body)
+			body, err := io.ReadAll(req.Body)
 			req.Body.Close()
 
 			if err == nil {
-				// Reassign body for proxy
+				// Reassign body for re-read by passthrough / not filtered requests
 				req.Body = io.NopCloser(bytes.NewReader(body))
+			}
+
+			if reason := inspectRequest(req, body, cfg); reason != "" {
+				filterRequest(rw, req, reason)
+				return
 			}
 		}
 
-		targetURL, err := url.Parse(cfg.Config.Proxy.Url)
-		if err != nil {
-			cfg.RUnlock()
-			panic(fmt.Errorf("invalid proxy URL: %v", err))
-		}
-
-		proxy := &httputil.ReverseProxy{
-			Rewrite: func(r *httputil.ProxyRequest) {
-				rewriteOutboundRequest(targetURL, r, req)
-			},
-
-			Transport: createTransport(targetURL, cfg),
-
-			ModifyResponse: func(resp *http.Response) error {
-				setProductInfo(&resp.Header)
-
-				// Request does not need to inspect
-				// Or there's something wrong with request body, passthrough.
-				if body == nil {
-					return nil
-				}
-
-				return inspectRequest(resp, body, cfg)
-			},
-		}
-
-		proxy.ServeHTTP(rw, req)
+		// Passthrough the request to upstream
+		passthrough(rw, req, cfg)
 
 		cfg.RUnlock()
 	}
+}
+
+// Passthrough the request to upstream
+func passthrough(rw http.ResponseWriter, req *http.Request, cfg *config.Config) {
+	targetURL, err := url.Parse(cfg.Config.Proxy.Url)
+	if err != nil {
+		cfg.RUnlock()
+		sendResponse(rw, http.StatusInternalServerError, "server error: invalid upstream url specified")
+		return
+	}
+
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			rewriteOutboundRequest(targetURL, r, req)
+		},
+
+		Transport: createTransport(targetURL, cfg),
+
+		ModifyResponse: func(resp *http.Response) error {
+			setProductInfo(&resp.Header)
+			return nil
+		},
+	}
+
+	proxy.ServeHTTP(rw, req)
 }
 
 // createTransport configures the HTTP transport with custom dialing logic
@@ -237,9 +241,32 @@ func getInboundClientRealIP(r *http.Request) string {
 }
 
 func setProductInfo(header *http.Header) {
-	if header.Get("Server") == "" {
-		header.Set("Server", SERVER_SIGNATURE)
+	header.Set("Server", SERVER_SIGNATURE)
+	header.Set("X-Powered-By", SERVER_SIGNATURE)
+}
+
+func sendResponse(rw http.ResponseWriter, statusCode int, message string) {
+	header := rw.Header()
+
+	setProductInfo(&header)
+	header.Set("Content-Type", "application/json; charset=utf-8")
+	header.Set("Cache-Control", "no-cache, no-store")
+	header.Set("Pragma", "no-cache")
+
+	rw.WriteHeader(statusCode)
+	rw.Write([]byte(fmt.Sprintf("{\"code\": %d,\"message\":\"%s\"}", statusCode, message)))
+}
+
+// Note: Returning a 400 in ActivityPub may result in repeated retries from the remote
+// or, in the worst case, delivery suspension. Therefore, return a 202 for 'inbox'.
+func filterRequest(rw http.ResponseWriter, req *http.Request, message string) {
+	// Set response status
+	var status int
+	if strings.Contains(req.RequestURI, "inbox") {
+		status = http.StatusAccepted
 	} else {
-		header.Set("X-Powered-By", SERVER_SIGNATURE)
+		status = http.StatusBadRequest
 	}
+
+	sendResponse(rw, status, message)
 }

@@ -20,6 +20,7 @@ Usage: ./activitypub-fw [-c config_file]
 ```json5
 {
     "server": {
+        "debug": false, // Will print detail access log for debug
         "address": "[::]", // Where we listen. Configure your front proxy server(usually nginx) to contact this. Only works if protocol is "tcp". IPv6 address should be in "[]"
         "path": "/var/run/activitypub-fw.sock", // Where we listen. Configure your front proxy server(usually nginx) to contact this. Only works if protocol is "unix"
         "port": 8080, // Only works if protocol is "tcp"
@@ -57,7 +58,7 @@ Usage: ./activitypub-fw [-c config_file]
 }
 ```
 
-# Set-up
+# Set up
 Assume you are running a mastodon instance behind a proxy server(nginx).
 
 Here is a sample nginx configuration section.
@@ -104,7 +105,7 @@ location = /api/notes/create {
     try_files $uri @activitypub_fw;
 }
 
-location /inbox {
+location = /inbox {
     try_files $uri @activitypub_fw;
 }
 
@@ -114,9 +115,9 @@ location /users {
 ```
 
 # Features
-- ✅ Basic filtering by ```At(@)``` and ```Mentions(cc)``` in an ActivityPub message
-- ✅ Basic Blacklist support for content filtering
-- ✅ Basic partial hot reload
+- ✅ Filtering by ```Mentions(@)``` and ```CC``` in an ActivityPub message
+- ✅ Content filtering based on keywords
+- ✅ Partial hot reload
 - Make an easy-to-use UI
 - Real time analyzation/log
 - Further integrations: anti-spam, ...

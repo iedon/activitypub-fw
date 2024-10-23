@@ -59,33 +59,25 @@ func loadConfig(configFile string) {
 	go watchConfig(configFile)
 }
 
-// CreateListener initializes a net.Listener based on the server configuration and environment
+// createListener initializes a net.Listener based on the server configuration and environment
 func createListener(cfg *config.Config) (net.Listener, error) {
-	var listener net.Listener
-	var err error
-
 	if os.Getenv("LISTEN_PID") == strconv.Itoa(os.Getpid()) {
 		// Run from systemd
 		const SD_LISTEN_FDS_START = 3
 		f := os.NewFile(SD_LISTEN_FDS_START, "")
-		listener, err = net.FileListener(f)
+		defer f.Close()
+		return net.FileListener(f)
 	} else {
 		switch strings.ToLower(cfg.Config.Server.Protocol) {
 		case "unix":
-			listener, err = net.Listen("unix", cfg.Config.Server.Path)
+			return net.Listen("unix", cfg.Config.Server.Path)
 		case "tcp":
 			listenAddr := fmt.Sprintf("%s:%d", cfg.Config.Server.Address, cfg.Config.Server.Port)
-			listener, err = net.Listen("tcp", listenAddr)
+			return net.Listen("tcp", listenAddr)
 		default:
 			return nil, fmt.Errorf("unsupported listen type: %s", cfg.Config.Server.Protocol)
 		}
 	}
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen: %w", err)
-	}
-
-	return listener, nil
 }
 
 func setServerParameters(s *http.Server, cfg *config.Config) {
@@ -98,10 +90,10 @@ func setServerParameters(s *http.Server, cfg *config.Config) {
 	s.IdleTimeout = time.Duration(cfg.Config.Server.IdleTimeout) * time.Second
 }
 
-// Use as a Goroutine to handle server shutdown gracefully
 func daemon(listener net.Listener) {
 	defer listener.Close()
 
+	// Use a Goroutine to handle server shutdown gracefully
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Could not serve: %v\n", err)
@@ -146,13 +138,13 @@ func watchConfig(filename string) {
 		select {
 		case event, ok := <-watcher.Events:
 			if !ok {
-				return
+				continue
 			}
 			if event.Has(fsnotify.Write) && event.Name == absPath {
 				newCfg, err := config.LoadConfig(filename)
 				if err != nil {
 					log.Printf("Error reloading config: %v\n", err)
-					return
+					continue
 				}
 
 				cfg.Lock()
@@ -163,11 +155,7 @@ func watchConfig(filename string) {
 
 				log.Println("Config reloaded successfully")
 			}
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				log.Println(err)
-				return
-			}
+		case err := <-watcher.Errors:
 			log.Printf("Watcher error: %v\n", err)
 		}
 	}

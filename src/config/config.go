@@ -7,6 +7,7 @@ import (
 )
 
 type serverConfig struct {
+	Debug                bool     `json:"debug"` // Will print detail access log for debug
 	Address              string   `json:"address"`
 	Path                 string   `json:"path"`
 	Port                 int      `json:"port"`
