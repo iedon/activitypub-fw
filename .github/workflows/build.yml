@@ -54,7 +54,11 @@ jobs:
         with:
           name: activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
           path: activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
+
+      - name: Get directory files
+        run: ls -al
+
       - uses: softprops/action-gh-release@v2
         with:
-          draft: false
-          files: activitypub-fw/activitypub-fw_*
+          draft: true
+          files: ./activitypub-fw_*
