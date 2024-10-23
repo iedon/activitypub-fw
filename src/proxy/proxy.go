@@ -44,6 +44,7 @@ func ProxyHandler(cfg *config.Config) http.HandlerFunc {
 
 			if reason := inspectRequest(req, body, cfg); reason != "" {
 				filterRequest(rw, req, reason)
+				cfg.RUnlock()
 				return
 			}
 		}
@@ -59,7 +60,6 @@ func ProxyHandler(cfg *config.Config) http.HandlerFunc {
 func passthrough(rw http.ResponseWriter, req *http.Request, cfg *config.Config) {
 	targetURL, err := url.Parse(cfg.Config.Proxy.Url)
 	if err != nil {
-		cfg.RUnlock()
 		sendResponse(rw, http.StatusInternalServerError, "server error: invalid upstream url specified")
 		return
 	}
