@@ -53,8 +53,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
-          path: ./src/activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: activitypub-fw_${{ matrix.goos }}_${{ matrix.goarch }}
       - uses: softprops/action-gh-release@v2
         with:
           draft: false
-          files: ./src/activitypub-fw_*
+          files: activitypub-fw_*
