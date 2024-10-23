@@ -57,4 +57,4 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: false
-          files: activitypub-fw_*
+          files: activitypub-fw/activitypub-fw_*
